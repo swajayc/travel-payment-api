@@ -5,6 +5,12 @@ import json
 
 app = Flask(__name__)
 
+
+import sys
+app = Flask(__name__)
+# Force stdout to flush immediately so logs appear in Railway
+sys.stdout = sys.stderr
+
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
 
