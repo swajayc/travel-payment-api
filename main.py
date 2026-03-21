@@ -124,6 +124,75 @@ def webhook():
 
     return jsonify({"status": "ok"}), 200
 
+# ── Reconciliation endpoint ──────────────────────────────────────────
+@app.route("/reconciliation", methods=["GET"])
+def reconciliation():
+    # Read optional filters from query parameters
+    cost_centre_filter = request.args.get("cost_centre", "").lower()
+    card_filter = request.args.get("card_id", "")
+
+    try:
+        # Fetch all issuing transactions from Stripe
+        # In production you'd add date range filters e.g. created[gte]=timestamp
+        transactions = stripe.issuing.Transaction.list(limit=100)
+
+        summary = []
+        total_spend = 0
+        blocked_spend = 0
+
+        for txn in transactions.auto_paging_iter():
+            # Get card metadata — this is where cost centre lives
+            card = txn.card if isinstance(txn.card, dict) else txn.card
+
+            # Handle both expanded and unexpanded card objects
+            if hasattr(card, 'metadata'):
+                cost_centre = card.metadata.get("cost_centre", "unknown")
+                purpose = card.metadata.get("purpose", "unknown")
+                card_last4 = card.last4
+            else:
+                cost_centre = "unknown"
+                purpose = "unknown"
+                card_last4 = "unknown"
+
+            # Apply cost centre filter if provided
+            if cost_centre_filter and cost_centre != cost_centre_filter:
+                continue
+
+            # Apply card filter if provided
+            if card_filter and txn.card != card_filter:
+                continue
+
+            # Amount is negative for spend (money leaving)
+            amount = abs(txn.amount) / 100
+
+            transaction_record = {
+                "transaction_id": txn.id,
+                "merchant": txn.merchant_data.name,
+                "merchant_category": txn.merchant_data.category,
+                "amount": amount,
+                "currency": txn.currency.upper(),
+                "date": txn.created,
+                "cost_centre": cost_centre,
+                "purpose": purpose,
+                "card_last4": card_last4,
+                "type": txn.type,
+            }
+
+            summary.append(transaction_record)
+            total_spend += amount
+
+        return jsonify({
+            "cost_centre": cost_centre_filter or "all",
+            "total_spend": round(total_spend, 2),
+            "transaction_count": len(summary),
+            "currency": "EUR",
+            "transactions": summary
+        }), 200
+
+    except stripe.error.StripeError as e:
+        app.logger.info(f"Stripe error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
