@@ -2,14 +2,10 @@ from flask import Flask, request, jsonify
 import stripe
 import os
 import json
+import logging
 
 app = Flask(__name__)
-
-
-import sys
-app = Flask(__name__)
-# Force stdout to flush immediately so logs appear in Railway
-sys.stdout = sys.stderr
+logging.basicConfig(level=logging.INFO)
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
@@ -76,66 +72,55 @@ def webhook():
         cost_centre = auth.card.metadata.get("cost_centre", "unknown")
         purpose = auth.card.metadata.get("purpose", "unknown")
 
-        print(f"🔔 Authorization request received!")
-        print(f"   Card: {card_id}")
-        print(f"   Merchant: {merchant}")
-        print(f"   Category: {merchant_category}")
-        print(f"   Amount: {currency.upper()} {amount/100}")
-        print(f"   Cost centre: {cost_centre}")
-        print(f"   Purpose: {purpose}")
+        app.logger.info(f"AUTHORIZATION REQUEST RECEIVED")
+        app.logger.info(f"Card: {card_id}")
+        app.logger.info(f"Merchant: {merchant}")
+        app.logger.info(f"Category: {merchant_category}")
+        app.logger.info(f"Amount: {currency.upper()} {amount/100}")
+        app.logger.info(f"Cost centre: {cost_centre}")
+        app.logger.info(f"Purpose: {purpose}")
 
-        # ── Approval logic ──
-        # Rule 1: Block transactions over €200 (20000 cents)
+        # Rule 1: Block transactions over €200
         if amount > 20000:
-            print(f"   ❌ DECLINED — amount €{amount/100} exceeds €200 limit")
+            app.logger.info(f"DECLINED - amount EUR {amount/100} exceeds EUR 200 limit")
             stripe.issuing.Authorization.decline(auth.id)
             return jsonify({"approved": False})
 
         # Rule 2: Block certain merchant categories
         blocked_categories = ["gambling", "airlines", "lodging"]
         if merchant_category in blocked_categories:
-            print(f"   ❌ DECLINED — merchant category '{merchant_category}' is blocked")
+            app.logger.info(f"DECLINED - category {merchant_category} is blocked")
             stripe.issuing.Authorization.decline(auth.id)
             return jsonify({"approved": False})
 
-        # All checks passed — approve
-        print(f"   ✅ APPROVED")
+        # All checks passed
+        app.logger.info(f"APPROVED")
         stripe.issuing.Authorization.approve(auth.id)
         return jsonify({"approved": True})
 
     # ── Issuing: transaction created after authorization ──
     elif event.type == "issuing_transaction.created":
         txn = event.data.object
-        amount = txn.amount
-        currency = txn.currency
-        merchant = txn.merchant_data.name
-        card_id = txn.card
-        cost_centre = txn.metadata.get("cost_centre", "unknown")
-
-        print(f"💳 Transaction created!")
-        print(f"   Card: {card_id}")
-        print(f"   Merchant: {merchant}")
-        print(f"   Amount: {currency.upper()} {abs(amount)/100}")
-        print(f"   Cost centre: {cost_centre}")
+        app.logger.info(f"TRANSACTION CREATED")
+        app.logger.info(f"Card: {txn.card}")
+        app.logger.info(f"Merchant: {txn.merchant_data.name}")
+        app.logger.info(f"Amount: {abs(txn.amount)/100}")
+        app.logger.info(f"Currency: {txn.currency.upper()}")
         # In production: write to database, update spend tracker,
-        # notify finance team, sync to ERP system
+        # notify finance team, sync to ERP
 
     # ── Checkout: travel booking payment ──
     elif event.type == "checkout.session.completed":
         session = event.data.object
-        package = session.metadata.get("package")
-        customer_email = session.customer_details.email if session.customer_details else "unknown"
-        amount = session.amount_total / 100
-
-        print(f"✅ Travel payment successful!")
-        print(f"   Package: {package}")
-        print(f"   Customer: {customer_email}")
-        print(f"   Amount: €{amount}")
+        app.logger.info(f"TRAVEL PAYMENT SUCCESSFUL")
+        app.logger.info(f"Package: {session.metadata.get('package')}")
+        app.logger.info(f"Customer: {session.customer_details.email if session.customer_details else 'unknown'}")
+        app.logger.info(f"Amount: EUR {session.amount_total/100}")
 
     elif event.type == "checkout.session.expired":
         session = event.data.object
-        package = session.metadata.get("package")
-        print(f"❌ Checkout abandoned for package: {package}")
+        app.logger.info(f"CHECKOUT ABANDONED")
+        app.logger.info(f"Package: {session.metadata.get('package')}")
 
     return jsonify({"status": "ok"}), 200
 
