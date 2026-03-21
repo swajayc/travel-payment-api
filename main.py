@@ -44,16 +44,3 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
 ```
 
-4. Click **Commit new file**
-
----
-
-**File 2 — `requirements.txt`**
-
-1. Click **Add file → Create new file** again
-2. Name it `requirements.txt`
-3. Paste this:
-```
-flask
-stripe
-gunicorn
