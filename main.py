@@ -16,6 +16,7 @@ PACKAGES = {
     "japan":    {"name": "Japan Explorer",          "price": 159900},
 }
 
+# ── Travel booking endpoint ──────────────────────────────────────────
 @app.route("/get-payment-link", methods=["GET"])
 def get_payment_link():
     package = request.args.get("package", "").lower()
@@ -35,7 +36,6 @@ def get_payment_link():
             "quantity": 1,
         }],
         mode="payment",
-        # Pass the package name into the session so webhook knows what was booked
         metadata={"package": package},
         success_url="https://yoursite.com/success",
         cancel_url="https://yoursite.com/cancel",
@@ -44,42 +44,92 @@ def get_payment_link():
     return jsonify({"url": session.url})
 
 
+# ── Webhook handler ──────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
     payload = request.get_data()
     sig_header = request.headers.get("Stripe-Signature")
 
-    # Verify the request actually came from Stripe (security check)
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, webhook_secret
         )
     except ValueError:
-        # Invalid payload
         return jsonify({"error": "Invalid payload"}), 400
     except stripe.error.SignatureVerificationError:
-        # Invalid signature — request didn't come from Stripe
         return jsonify({"error": "Invalid signature"}), 400
 
-    # Handle successful payment
-    if event.type == "checkout.session.completed":
+    # ── Issuing: card authorization (approve/decline in real time) ──
+    if event.type == "issuing_authorization.request":
+        auth = event.data.object
+        card_id = auth.card.id
+        amount = auth.amount
+        currency = auth.currency
+        merchant = auth.merchant_data.name
+        merchant_category = auth.merchant_data.category
+        cost_centre = auth.card.metadata.get("cost_centre", "unknown")
+        purpose = auth.card.metadata.get("purpose", "unknown")
+
+        print(f"🔔 Authorization request received!")
+        print(f"   Card: {card_id}")
+        print(f"   Merchant: {merchant}")
+        print(f"   Category: {merchant_category}")
+        print(f"   Amount: {currency.upper()} {amount/100}")
+        print(f"   Cost centre: {cost_centre}")
+        print(f"   Purpose: {purpose}")
+
+        # ── Approval logic ──
+        # Rule 1: Block transactions over €200 (20000 cents)
+        if amount > 20000:
+            print(f"   ❌ DECLINED — amount €{amount/100} exceeds €200 limit")
+            stripe.issuing.Authorization.decline(auth.id)
+            return jsonify({"approved": False})
+
+        # Rule 2: Block certain merchant categories
+        blocked_categories = ["gambling", "airlines", "lodging"]
+        if merchant_category in blocked_categories:
+            print(f"   ❌ DECLINED — merchant category '{merchant_category}' is blocked")
+            stripe.issuing.Authorization.decline(auth.id)
+            return jsonify({"approved": False})
+
+        # All checks passed — approve
+        print(f"   ✅ APPROVED")
+        stripe.issuing.Authorization.approve(auth.id)
+        return jsonify({"approved": True})
+
+    # ── Issuing: transaction created after authorization ──
+    elif event.type == "issuing_transaction.created":
+        txn = event.data.object
+        amount = txn.amount
+        currency = txn.currency
+        merchant = txn.merchant_data.name
+        card_id = txn.card
+        cost_centre = txn.metadata.get("cost_centre", "unknown")
+
+        print(f"💳 Transaction created!")
+        print(f"   Card: {card_id}")
+        print(f"   Merchant: {merchant}")
+        print(f"   Amount: {currency.upper()} {abs(amount)/100}")
+        print(f"   Cost centre: {cost_centre}")
+        # In production: write to database, update spend tracker,
+        # notify finance team, sync to ERP system
+
+    # ── Checkout: travel booking payment ──
+    elif event.type == "checkout.session.completed":
         session = event.data.object
         package = session.metadata.get("package")
         customer_email = session.customer_details.email if session.customer_details else "unknown"
-        amount = session.amount_total / 100  # Convert cents back to euros
+        amount = session.amount_total / 100
 
-        print(f"✅ Payment successful!")
+        print(f"✅ Travel payment successful!")
         print(f"   Package: {package}")
         print(f"   Customer: {customer_email}")
         print(f"   Amount: €{amount}")
-        # In production: trigger email, create Zendesk ticket, update CRM etc.
 
-    # Handle abandoned/expired checkout
     elif event.type == "checkout.session.expired":
         session = event.data.object
         package = session.metadata.get("package")
         print(f"❌ Checkout abandoned for package: {package}")
-        # In production: follow up email, create Zendesk ticket for sales team etc.
 
     return jsonify({"status": "ok"}), 200
 
