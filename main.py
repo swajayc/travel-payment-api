@@ -134,7 +134,10 @@ def reconciliation():
     try:
         # Fetch all issuing transactions from Stripe
         # In production you'd add date range filters e.g. created[gte]=timestamp
-        transactions = stripe.issuing.Transaction.list(limit=100)
+        transactions = stripe.issuing.Transaction.list(
+    limit=100,
+    expand=["data.card"]
+)
 
         summary = []
         total_spend = 0
